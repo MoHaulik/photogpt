@@ -2,24 +2,27 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>WebXR Photo Gallery</title>
+  <title>WebXR Photo Gallery - Consistent UI</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
   <style>
-    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:#f2f2f7; overflow-x:hidden; }
-    .header { position:sticky; top:0; background:rgba(255,255,255,0.9); padding:16px; border-bottom:1px solid rgba(0,0,0,0.1); }
-    .header h1 { margin:0; font-size:24px; }
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; background:#f2f2f7; color:#1c1c1e; overflow-x:hidden; }
+    .header { background:rgba(255,255,255,0.92); position:sticky; top:0; padding:16px 20px; border-bottom:1px solid rgba(0,0,0,0.1); z-index:100; backdrop-filter:blur(10px); }
+    .header h1 { margin:0; font-size:28px; font-weight:700; }
+    .enter-ar-button { position:fixed; bottom:30px; left:50%; transform:translateX(-50%); padding:12px 24px; background:rgba(0,122,255,0.9); color:#fff; border:none; border-radius:30px; font-size:16px; font-weight:600; cursor:pointer; box-shadow:0 4px 12px rgba(0,122,255,0.3); z-index:100; }
     .gallery-container { padding:10px; max-width:1200px; margin:0 auto; }
-    .gallery-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px; }
+    .gallery-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px; padding:4px; }
     @media(min-width:768px){ .gallery-grid { grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:12px; }}
     .photo-item { position:relative; padding-bottom:100%; overflow:hidden; border-radius:8px; cursor:pointer; box-shadow:0 1px 3px rgba(0,0,0,0.1); transition:transform .2s,box-shadow .2s; background:#e0e0e0; }
     .photo-item:hover { transform:scale(1.02); box-shadow:0 4px 8px rgba(0,0,0,0.15); }
     .photo-item img { position:absolute; width:100%; height:100%; object-fit:cover; }
-    .xr-canvas { position:fixed; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:1; }
+    .xr-canvas { position:fixed; top:0; left:0; width:100%; height:100%; z-index:1; pointer-events:none; }
     .xr-active .xr-canvas { pointer-events:auto; }
-    .enter-ar-button { position:fixed; bottom:30px; left:50%; transform:translateX(-50%); padding:12px 24px; background:rgba(0,122,255,0.9); color:#fff; border:none; border-radius:30px; font-weight:600; cursor:pointer; box-shadow:0 4px 12px rgba(0,122,255,0.3); z-index:100; }
-    .exit-ar { position:fixed; top:20px; right:20px; width:44px; height:44px; border:none; border-radius:50%; background:rgba(255,255,255,0.6); font-size:24px; line-height:44px; text-align:center; cursor:pointer; display:none; z-index:100; }
-    .xr-active .exit-ar { display:block; }
-    #status { position:fixed; bottom:100px; left:50%; transform:translateX(-50%); background:rgba(0,0,0,0.5); color:#fff; padding:12px 20px; border-radius:24px; text-align:center; display:none; z-index:100; }
+    /* No layout changes in XR mode */
+    .exit-ar { position:fixed; top:20px; right:20px; background:rgba(255,255,255,0.25); color:#fff; border:none; border-radius:50%; width:50px; height:50px; display:flex; align-items:center; justify-content:center; font-size:24px; cursor:pointer; backdrop-filter:blur(5px); box-shadow:0 2px 10px rgba(0,0,0,0.2); z-index:1000; display:none; }
+    .xr-active .exit-ar { display:flex; }
+    #status { position:fixed; bottom:140px; left:50%; transform:translateX(-50%); background:rgba(0,0,0,0.5); color:#fff; padding:12px 20px; border-radius:24px; font-size:16px; font-weight:500; text-align:center; display:none; z-index:1000; }
   </style>
 </head>
 <body>
@@ -34,19 +37,21 @@
 
   <script type="module">
     import * as THREE from 'https://unpkg.com/three@0.150.1/build/three.module.js';
+
     const photoURLs = ['./Photo/photo1.jpg','./Photo/photo2.jpg','./Photo/photo3.jpg','./Photo/photo4.jpg','./Photo/photo5.jpg'];
-    let camera, scene, renderer, xrSession,
-        controllers = [], activeControllers = new Set(),
-        selectedIndex = -1;
+    let camera, scene, renderer, xrSession;
 
     function initPhotoGrid() {
       const grid = document.getElementById('photo-grid');
-      photoURLs.forEach((url, i) => {
-        const item = document.createElement('div'); item.className = 'photo-item';
-        const img = document.createElement('img'); img.src = url; img.alt = `Photo ${i+1}`;
+      photoURLs.forEach((url) => {
+        const item = document.createElement('div');
+        item.className = 'photo-item';
+        const img = document.createElement('img'); img.src = url; img.loading = 'lazy';
         item.appendChild(img);
         item.addEventListener('click', () => {
-          if (document.body.classList.contains('xr-active')) createPhotoInAR(url);
+          if (document.body.classList.contains('xr-active')) {
+            createPhotoInAR(url);
+          }
         });
         grid.appendChild(item);
       });
@@ -54,22 +59,24 @@
 
     function initXR() {
       scene = new THREE.Scene();
-      camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, .01, 20);
-      renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
-      renderer.setSize(innerWidth, innerHeight);
+      camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.01, 20);
+      renderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
+      renderer.setSize(window.innerWidth, window.innerHeight);
       renderer.xr.enabled = true;
       document.getElementById('xr-canvas').appendChild(renderer.domElement);
-      scene.add(new THREE.AmbientLight(0x404040,2));
-      const dl = new THREE.DirectionalLight(0xffffff,1.5); dl.position.set(1,1,1); scene.add(dl);
+      scene.add(new THREE.AmbientLight(0x404040, 2));
+      const dir = new THREE.DirectionalLight(0xffffff, 1.5);
+      dir.position.set(1,1,1); scene.add(dir);
       window.addEventListener('resize', () => {
-        camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
-        renderer.setSize(innerWidth, innerHeight);
+        camera.aspect = window.innerWidth/window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
       });
     }
 
     function startARSession() {
       if (!navigator.xr) return updateStatus('WebXR not supported');
-      navigator.xr.isSessionSupported('immersive-ar').then(supported => {
+      navigator.xr.isSessionSupported('immersive-ar').then((supported) => {
         if (!supported) return updateStatus('AR not supported');
         navigator.xr.requestSession('immersive-ar', {
           requiredFeatures: ['hit-test'],
@@ -81,71 +88,47 @@
 
     function onSessionStarted(session) {
       xrSession = session;
+      renderer.xr.setReferenceSpaceType('local');
       renderer.xr.setSession(session);
       document.body.classList.add('xr-active');
-      setupControllers();
-      renderer.setAnimationLoop(render);
-      session.addEventListener('end', onSessionEnded);
-      updateStatus('AR mode: tap a photo to place');
+      session.addEventListener('end', onSessionEnd);
+      renderer.setAnimationLoop((_, frame) => renderer.render(scene, camera));
+      updateStatus('AR mode: tap thumbnails to place');
     }
 
-    function onSessionEnded() {
+    function onSessionEnd() {
       xrSession = null;
       renderer.setAnimationLoop(null);
       document.body.classList.remove('xr-active');
-      clearScene();
-    }
-
-    function endARSession() {
-      if (xrSession) xrSession.end();
-    }
-
-    function clearScene() {
-      while(scene.children.length) scene.remove(scene.children[0]);
-    }
-
-    function setupControllers() {
-      controllers.forEach(c => scene.remove(c));
-      controllers = [];
-      for (let i=0; i<2; i++) {
-        const controller = renderer.xr.getController(i);
-        controller.addEventListener('select', () => {});
-        scene.add(controller);
-        controllers.push(controller);
-      }
+      scene.clear();
+      updateStatus('');
     }
 
     function createPhotoInAR(url) {
       const loader = new THREE.TextureLoader();
       const width = 0.5, ar = 4/3, height = width/ar;
-      const geo = new THREE.PlaneGeometry(width, height);
-      const mat = new THREE.MeshBasicMaterial({ color:0xcccccc, side:THREE.DoubleSide });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.copy(camera.position).add(new THREE.Vector3(0,0,-0.8).applyQuaternion(camera.quaternion));
+      const geometry = new THREE.PlaneGeometry(width, height);
+      const material = new THREE.MeshBasicMaterial({ color:0xcccccc, side: THREE.DoubleSide });
+      const mesh = new THREE.Mesh(geometry, material);
+      const offset = new THREE.Vector3(0,0,-0.8).applyQuaternion(camera.quaternion);
+      mesh.position.copy(camera.position).add(offset);
       mesh.quaternion.copy(camera.quaternion);
       scene.add(mesh);
-      loader.load(url, tex => {
-        mesh.material.map = tex;
-        mesh.material.color.set(0xffffff);
-        updateStatus('Photo placed');
-      });
+      loader.load(url, (tex) => { mesh.material.map = tex; mesh.material.color.set(0xffffff); updateStatus('Photo placed'); });
     }
 
-    function render(time, frame) {
-      renderer.render(scene, camera);
-    }
+    function onSessionEndClick() { if (xrSession) xrSession.end(); }
 
     function updateStatus(msg) {
       const s = document.getElementById('status');
-      s.textContent = msg;
-      s.style.display = msg ? 'block' : 'none';
-      if (msg) setTimeout(()=>s.style.display='none',3000);
+      s.textContent = msg; s.style.display = msg ? 'block' : 'none';
+      if (msg) setTimeout(() => { s.style.display = 'none'; }, 5000);
     }
 
     document.addEventListener('DOMContentLoaded', () => {
       initPhotoGrid(); initXR();
       document.getElementById('enter-ar').addEventListener('click', startARSession);
-      document.getElementById('exit-ar').addEventListener('click', endARSession);
+      document.getElementById('exit-ar').addEventListener('click', onSessionEndClick);
     });
   </script>
 </body>
