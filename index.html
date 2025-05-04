@@ -19,7 +19,6 @@
     .photo-item img { position:absolute; width:100%; height:100%; object-fit:cover; }
     .xr-canvas { position:fixed; top:0; left:0; width:100%; height:100%; z-index:1; pointer-events:none; }
     .xr-active .xr-canvas { pointer-events:auto; }
-    /* No layout changes in XR mode */
     .exit-ar { position:fixed; top:20px; right:20px; background:rgba(255,255,255,0.25); color:#fff; border:none; border-radius:50%; width:50px; height:50px; display:flex; align-items:center; justify-content:center; font-size:24px; cursor:pointer; backdrop-filter:blur(5px); box-shadow:0 2px 10px rgba(0,0,0,0.2); z-index:1000; display:none; }
     .xr-active .exit-ar { display:flex; }
     #status { position:fixed; bottom:140px; left:50%; transform:translateX(-50%); background:rgba(0,0,0,0.5); color:#fff; padding:12px 20px; border-radius:24px; font-size:16px; font-weight:500; text-align:center; display:none; z-index:1000; }
@@ -28,11 +27,11 @@
 <body>
   <header class="header"><h1>Photo Gallery</h1></header>
   <div class="gallery-container">
-    <div class="gallery-grid" id="photo-grid"></div>
+    <div id="photo-grid" class="gallery-grid"></div>
   </div>
-  <div class="xr-canvas" id="xr-canvas"></div>
-  <button class="enter-ar-button" id="enter-ar">Enter AR Gallery</button>
-  <button class="exit-ar" id="exit-ar">×</button>
+  <div id="xr-canvas" class="xr-canvas"></div>
+  <button id="enter-ar" class="enter-ar-button">Enter AR Gallery</button>
+  <button id="exit-ar" class="exit-ar">×</button>
   <div id="status"></div>
 
   <script type="module">
@@ -40,19 +39,17 @@
 
     const photoURLs = ['./Photo/photo1.jpg','./Photo/photo2.jpg','./Photo/photo3.jpg','./Photo/photo4.jpg','./Photo/photo5.jpg'];
     let camera, scene, renderer, xrSession;
+    let controllers = [], activeControllers = new Set();
+    let selectedPhoto = null, interactionMode = 'none';
+    let initialPositions = {}, initialDistance = 0, initialScale = new THREE.Vector3(), initialRotation = 0;
 
     function initPhotoGrid() {
       const grid = document.getElementById('photo-grid');
-      photoURLs.forEach((url) => {
-        const item = document.createElement('div');
-        item.className = 'photo-item';
-        const img = document.createElement('img'); img.src = url; img.loading = 'lazy';
+      photoURLs.forEach(url => {
+        const item = document.createElement('div'); item.className='photo-item';
+        const img = document.createElement('img'); img.src=url; img.loading='lazy';
         item.appendChild(img);
-        item.addEventListener('click', () => {
-          if (document.body.classList.contains('xr-active')) {
-            createPhotoInAR(url);
-          }
-        });
+        item.onclick = () => { if (xrSession) createPhotoInAR(url); };
         grid.appendChild(item);
       });
     }
@@ -65,8 +62,8 @@
       renderer.xr.enabled = true;
       document.getElementById('xr-canvas').appendChild(renderer.domElement);
       scene.add(new THREE.AmbientLight(0x404040, 2));
-      const dir = new THREE.DirectionalLight(0xffffff, 1.5);
-      dir.position.set(1,1,1); scene.add(dir);
+      const dirLight = new THREE.DirectionalLight(0xffffff,1.5);
+      dirLight.position.set(1,1,1); scene.add(dirLight);
       window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth/window.innerHeight;
         camera.updateProjectionMatrix();
@@ -74,30 +71,99 @@
       });
     }
 
+    function setupControllers() {
+      for (let i=0; i<2; i++) {
+        const ctrl = renderer.xr.getController(i);
+        ctrl.userData.id = i;
+        ctrl.addEventListener('selectstart', onSelectStart);
+        ctrl.addEventListener('selectend', onSelectEnd);
+        scene.add(ctrl);
+        controllers.push(ctrl);
+      }
+    }
+
+    function onSelectStart(e) {
+      const id = e.target.userData.id;
+      activeControllers.add(id);
+      if (interactionMode==='none') {
+        const hit = findIntersectedPhoto(e.target);
+        if (hit) {
+          selectedPhoto = hit;
+          interactionMode = 'move';
+          initialPositions[id] = e.target.position.clone();
+        }
+      } else if (interactionMode==='move' && activeControllers.size===2) {
+        interactionMode = 'transform';
+        controllers.forEach(c=> initialPositions[c.userData.id] = c.position.clone());
+        initialDistance = getDistance(); initialScale.copy(selectedPhoto.scale);
+        const [a,b] = [initialPositions[0], initialPositions[1]];
+        initialRotation = Math.atan2(b.x-a.x, b.z-a.z);
+      }
+    }
+
+    function onSelectEnd(e) {
+      activeControllers.delete(e.target.userData.id);
+      if (interactionMode==='transform' && activeControllers.size<2) interactionMode='move';
+      if (interactionMode==='move' && activeControllers.size===0) { interactionMode='none'; selectedPhoto=null; }
+    }
+
+    function findIntersectedPhoto(controller) {
+      const pos = new THREE.Vector3(); controller.getWorldPosition(pos);
+      return scene.children.find(obj => obj.userData && obj.userData.isPhoto && pos.distanceTo(obj.position)<0.2);
+    }
+
+    function getDistance() {
+      const p0 = new THREE.Vector3(), p1=new THREE.Vector3();
+      controllers[0].getWorldPosition(p0); controllers[1].getWorldPosition(p1);
+      return p0.distanceTo(p1);
+    }
+
+    function handleInteraction() {
+      if (!selectedPhoto) return;
+      if (interactionMode==='move' && activeControllers.size===1) {
+        const cid = Array.from(activeControllers)[0];
+        const ctrl = controllers[cid];
+        const pos = new THREE.Vector3(); ctrl.getWorldPosition(pos);
+        selectedPhoto.position.copy(pos);
+      }
+      if (interactionMode==='transform' && activeControllers.size===2) {
+        const dist = getDistance();
+        const scaleFactor = THREE.MathUtils.clamp(dist/initialDistance, 0.5,3);
+        selectedPhoto.scale.copy(initialScale).multiplyScalar(scaleFactor);
+        const v0=new THREE.Vector3(), v1=new THREE.Vector3();
+        controllers[0].getWorldPosition(v0); controllers[1].getWorldPosition(v1);
+        const angle = Math.atan2(v1.x-v0.x, v1.z-v0.z);
+        selectedPhoto.rotation.y = angle - initialRotation;
+      }
+    }
+
+    function animate(timestamp, frame) {
+      if (frame) handleInteraction();
+      renderer.render(scene, camera);
+    }
+
     function startARSession() {
       if (!navigator.xr) return updateStatus('WebXR not supported');
-      navigator.xr.isSessionSupported('immersive-ar').then((supported) => {
-        if (!supported) return updateStatus('AR not supported');
-        navigator.xr.requestSession('immersive-ar', {
-          requiredFeatures: ['hit-test'],
-          optionalFeatures: ['dom-overlay'],
-          domOverlay: { root: document.body }
-        }).then(onSessionStarted);
+      navigator.xr.isSessionSupported('immersive-ar').then(s=>{
+        if (!s) return updateStatus('AR not supported');
+        navigator.xr.requestSession('immersive-ar',{ requiredFeatures:['hit-test'], optionalFeatures:['dom-overlay'], domOverlay:{root:document.body} })
+          .then(ses=>{
+            xrSession=ses;
+            renderer.xr.setReferenceSpaceType('local');
+            renderer.xr.setSession(ses);
+            document.body.classList.add('xr-active');
+            setupControllers();
+            ses.addEventListener('end', endARSession);
+            renderer.setAnimationLoop(animate);
+            updateStatus('AR mode: tap a gallery image to place.');
+          });
       });
     }
 
-    function onSessionStarted(session) {
-      xrSession = session;
-      renderer.xr.setReferenceSpaceType('local');
-      renderer.xr.setSession(session);
-      document.body.classList.add('xr-active');
-      session.addEventListener('end', onSessionEnd);
-      renderer.setAnimationLoop((_, frame) => renderer.render(scene, camera));
-      updateStatus('AR mode: tap thumbnails to place');
-    }
-
-    function onSessionEnd() {
-      xrSession = null;
+    function endARSession() {
+      if (!xrSession) return;
+      xrSession.end();
+      xrSession=null;
       renderer.setAnimationLoop(null);
       document.body.classList.remove('xr-active');
       scene.clear();
@@ -106,29 +172,32 @@
 
     function createPhotoInAR(url) {
       const loader = new THREE.TextureLoader();
-      const width = 0.5, ar = 4/3, height = width/ar;
-      const geometry = new THREE.PlaneGeometry(width, height);
-      const material = new THREE.MeshBasicMaterial({ color:0xcccccc, side: THREE.DoubleSide });
-      const mesh = new THREE.Mesh(geometry, material);
-      const offset = new THREE.Vector3(0,0,-0.8).applyQuaternion(camera.quaternion);
+      const width=0.5, height=width*(3/4);
+      const geo = new THREE.PlaneGeometry(width,height);
+      const mat = new THREE.MeshBasicMaterial({color:0xcccccc, side:THREE.DoubleSide});
+      const mesh = new THREE.Mesh(geo,mat);
+      // random offset around user
+      const angle = Math.random()*Math.PI*2;
+      const radius = 0.6 + Math.random()*0.4;
+      const offset = new THREE.Vector3(Math.cos(angle)*radius, 0, -Math.sin(angle)*radius)
+        .applyQuaternion(camera.quaternion);
       mesh.position.copy(camera.position).add(offset);
       mesh.quaternion.copy(camera.quaternion);
+      mesh.userData.isPhoto = true;
       scene.add(mesh);
-      loader.load(url, (tex) => { mesh.material.map = tex; mesh.material.color.set(0xffffff); updateStatus('Photo placed'); });
+      loader.load(url, tex => { mesh.material.map=tex; mesh.material.color.set(0xffffff); updateStatus('Photo placed'); });
     }
-
-    function onSessionEndClick() { if (xrSession) xrSession.end(); }
 
     function updateStatus(msg) {
       const s = document.getElementById('status');
-      s.textContent = msg; s.style.display = msg ? 'block' : 'none';
-      if (msg) setTimeout(() => { s.style.display = 'none'; }, 5000);
+      s.textContent = msg; s.style.display = msg?'block':'none';
+      if (msg) clearTimeout(s._timer), s._timer=setTimeout(()=>s.style.display='none',5000);
     }
 
-    document.addEventListener('DOMContentLoaded', () => {
+    document.addEventListener('DOMContentLoaded', ()=>{
       initPhotoGrid(); initXR();
-      document.getElementById('enter-ar').addEventListener('click', startARSession);
-      document.getElementById('exit-ar').addEventListener('click', onSessionEndClick);
+      document.getElementById('enter-ar').onclick = startARSession;
+      document.getElementById('exit-ar').onclick = endARSession;
     });
   </script>
 </body>
