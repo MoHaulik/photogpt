@@ -35,13 +35,15 @@
   <script type="module">
     import * as THREE from 'https://unpkg.com/three@0.150.1/build/three.module.js';
     const photoURLs = ['./Photo/photo1.jpg','./Photo/photo2.jpg','./Photo/photo3.jpg','./Photo/photo4.jpg','./Photo/photo5.jpg'];
-    let camera, scene, renderer, xrSession, controllers = [], active = new Set(), selected = null;
+    let camera, scene, renderer, xrSession,
+        controllers = [], activeControllers = new Set(),
+        selectedIndex = -1;
 
     function initPhotoGrid() {
       const grid = document.getElementById('photo-grid');
-      photoURLs.forEach(url => {
+      photoURLs.forEach((url, i) => {
         const item = document.createElement('div'); item.className = 'photo-item';
-        const img = document.createElement('img'); img.src = url;
+        const img = document.createElement('img'); img.src = url; img.alt = `Photo ${i+1}`;
         item.appendChild(img);
         item.addEventListener('click', () => {
           if (document.body.classList.contains('xr-active')) createPhotoInAR(url);
@@ -54,7 +56,8 @@
       scene = new THREE.Scene();
       camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, .01, 20);
       renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
-      renderer.setSize(innerWidth, innerHeight); renderer.xr.enabled = true;
+      renderer.setSize(innerWidth, innerHeight);
+      renderer.xr.enabled = true;
       document.getElementById('xr-canvas').appendChild(renderer.domElement);
       scene.add(new THREE.AmbientLight(0x404040,2));
       const dl = new THREE.DirectionalLight(0xffffff,1.5); dl.position.set(1,1,1); scene.add(dl);
@@ -64,62 +67,85 @@
       });
     }
 
-    function startAR() {
+    function startARSession() {
       if (!navigator.xr) return updateStatus('WebXR not supported');
-      navigator.xr.isSessionSupported('immersive-ar').then(ok => {
-        if (!ok) return updateStatus('AR not supported');
-        navigator.xr.requestSession('immersive-ar', { requiredFeatures:['hit-test'], optionalFeatures:['dom-overlay'], domOverlay:{root:document.body} })
-          .then(session => onSessionStart(session));
+      navigator.xr.isSessionSupported('immersive-ar').then(supported => {
+        if (!supported) return updateStatus('AR not supported');
+        navigator.xr.requestSession('immersive-ar', {
+          requiredFeatures: ['hit-test'],
+          optionalFeatures: ['dom-overlay'],
+          domOverlay: { root: document.body }
+        }).then(onSessionStarted);
       });
     }
 
-    function onSessionStart(session) {
-      xrSession = session; renderer.xr.setSession(session);
+    function onSessionStarted(session) {
+      xrSession = session;
+      renderer.xr.setSession(session);
       document.body.classList.add('xr-active');
-      setupControllers(); renderer.setAnimationLoop(render);
-      session.addEventListener('end', endAR);
-      updateStatus('AR mode: tap photo to place');
+      setupControllers();
+      renderer.setAnimationLoop(render);
+      session.addEventListener('end', onSessionEnded);
+      updateStatus('AR mode: tap a photo to place');
     }
 
-    function endAR() {
-      xrSession=null; renderer.setAnimationLoop(null);
-      document.body.classList.remove('xr-active'); clearScene(); updateStatus('');
+    function onSessionEnded() {
+      xrSession = null;
+      renderer.setAnimationLoop(null);
+      document.body.classList.remove('xr-active');
+      clearScene();
     }
 
-    function clearScene() { while(scene.children.length) scene.remove(scene.children[0]); }
+    function endARSession() {
+      if (xrSession) xrSession.end();
+    }
 
-    function createPhotoInAR(url) {
-      const loader = new THREE.TextureLoader();
-      const w=0.5, ar=4/3, h=w/ar;
-      const geo=new THREE.PlaneGeometry(w,h);
-      const mat=new THREE.MeshBasicMaterial({ color:0xcccccc, side:THREE.DoubleSide });
-      const mesh=new THREE.Mesh(geo,mat);
-      const offset=new THREE.Vector3(0,0,-0.8).applyQuaternion(camera.quaternion);
-      mesh.position.copy(camera.position).add(offset);
-      mesh.quaternion.copy(camera.quaternion);
-      scene.add(mesh);
-      loader.load(url, tex => { mesh.material.map=tex; mesh.material.color.set(0xffffff); updateStatus('Placed photo'); });
+    function clearScene() {
+      while(scene.children.length) scene.remove(scene.children[0]);
     }
 
     function setupControllers() {
-      for (let i=0;i<2;i++) {
-        const c = renderer.xr.getController(i);
-        scene.add(c); controllers.push(c);
+      controllers.forEach(c => scene.remove(c));
+      controllers = [];
+      for (let i=0; i<2; i++) {
+        const controller = renderer.xr.getController(i);
+        controller.addEventListener('select', () => {});
+        scene.add(controller);
+        controllers.push(controller);
       }
     }
 
-    function render(time, frame) { renderer.render(scene, camera); }
+    function createPhotoInAR(url) {
+      const loader = new THREE.TextureLoader();
+      const width = 0.5, ar = 4/3, height = width/ar;
+      const geo = new THREE.PlaneGeometry(width, height);
+      const mat = new THREE.MeshBasicMaterial({ color:0xcccccc, side:THREE.DoubleSide });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.copy(camera.position).add(new THREE.Vector3(0,0,-0.8).applyQuaternion(camera.quaternion));
+      mesh.quaternion.copy(camera.quaternion);
+      scene.add(mesh);
+      loader.load(url, tex => {
+        mesh.material.map = tex;
+        mesh.material.color.set(0xffffff);
+        updateStatus('Photo placed');
+      });
+    }
+
+    function render(time, frame) {
+      renderer.render(scene, camera);
+    }
 
     function updateStatus(msg) {
       const s = document.getElementById('status');
-      s.textContent=msg; s.style.display= msg? 'block':'none';
-      if (msg) setTimeout(()=>s.style.display='none',4000);
+      s.textContent = msg;
+      s.style.display = msg ? 'block' : 'none';
+      if (msg) setTimeout(()=>s.style.display='none',3000);
     }
 
     document.addEventListener('DOMContentLoaded', () => {
       initPhotoGrid(); initXR();
-      document.getElementById('enter-ar').addEventListener('click', startAR);
-      document.getElementById('exit-ar').addEventListener('click', endAR);
+      document.getElementById('enter-ar').addEventListener('click', startARSession);
+      document.getElementById('exit-ar').addEventListener('click', endARSession);
     });
   </script>
 </body>
